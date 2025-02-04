@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Emoji Football Kick Game</title>
+  <style>
+    body { margin: 0; overflow: hidden; position: relative; }
+    canvas { display: block; }
+    /* New Game button styling */
+    #newGameButton {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 24px;
+      padding: 10px 20px;
+      display: none;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <!-- Canvas for the game -->
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <!-- New Game button (appears when time runs out) -->
+  <button id="newGameButton">New Game</button>
+  
+  <!-- Include Matter.js from a CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+  <script>
+    // Module aliases.
+    const Engine    = Matter.Engine,
+          Render    = Matter.Render,
+          Runner    = Matter.Runner,
+          Bodies    = Matter.Bodies,
+          Composite = Matter.Composite,
+          Body      = Matter.Body,
+          Events    = Matter.Events;
+    
+    // Create the physics engine and world.
+    const engine = Engine.create();
+    const world  = engine.world;
+    
+    // Set up the canvas and renderer.
+    const canvas = document.getElementById('gameCanvas');
+    const render = Render.create({
+      canvas: canvas,
+      engine: engine,
+      options: {
+        width: 800,
+        height: 600,
+        wireframes: false,
+        // Keep a blue sky for the upper half.
+        background: '#87CEEB'
+      }
+    });
+    Render.run(render);
+    
+    // Create a runner.
+    const runner = Runner.create();
+    Runner.run(runner, engine);
+    
+    // ----- Global Game Variables -----
+    let score = 0;
+    let kickCount = 0;        // number of kicks taken in the current round
+    let goalMessage = "";     // text to display when a touchdown is scored
+    let timeLeft = 30;        // 30-second timer
+    let gameActive = true;    // game is active while true
+    
+    // Start the countdown timer.
+    const timerInterval = setInterval(() => {
+      if (gameActive) {
+        timeLeft--;
+        if (timeLeft <= 0) {
+          timeLeft = 0;
+          gameActive = false;
+          showNewGameButton();
+        }
+      }
+    }, 1000);
+    
+    // New Game button functionality.
+    const newGameButton = document.getElementById('newGameButton');
+    newGameButton.addEventListener('click', () => {
+      resetGame();
+      newGameButton.style.display = "none";
+    });
+    
+    // ----- Create the Scene -----
+    // Ground (turf field).
+    const ground = Bodies.rectangle(400, 590, 810, 20, { 
+      isStatic: true,
+      render: { fillStyle: '#32CD32' } // turf-green color
+    });
+    Composite.add(world, ground);
+    
+    // Original obstacles (representing defenders).
+    const obstacle1 = Bodies.rectangle(400, 500, 100, 20, { 
+      isStatic: true, 
+      angle: Math.PI * 0.06, 
+      render: { fillStyle: '#8B4513' },
+      isObstacle: true,
+      isOriginal: true
+    });
+    const obstacle2 = Bodies.rectangle(600, 400, 150, 20, { 
+      isStatic: true, 
+      angle: -Math.PI * 0.1, 
+      render: { fillStyle: '#8B4513' },
+      isObstacle: true,
+      isOriginal: true
+    });
+    Composite.add(world, [obstacle1, obstacle2]);
+    
+    // Goal area (sensor for scoring a touchdown).
+    const goal = Bodies.rectangle(750, 500, 80, 200, { 
+      isStatic: true, 
+      isSensor: true, 
+      // Make the body invisible since we draw custom goal posts.
+      render: { fillStyle: 'rgba(0,0,0,0)' }
+    });
+    Composite.add(world, goal);
+    
+    // Football.
+    const ballRadius = 20;
+    const ball = Bodies.circle(150, 500, ballRadius, { 
+      restitution: 0.6, 
+      density: 0.004,
+      render: { fillStyle: '#ffffff' }
+    });
+    Composite.add(world, ball);
+    
+    // ----- Custom Rendering for Emoji, Score, Timer, Touchdown Message, and Goal Posts -----
+    Events.on(render, 'afterRender', function() {
+      const context = render.context;
+      
+      // Draw the football emoji.
+      context.font = "40px serif";
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText("🏈", ball.position.x, ball.position.y);
+      
+      // Draw the kick indicator while dragging.
+      if (isDragging && dragStart && dragCurrent && gameActive) {
+        context.strokeStyle = "red";
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(ball.position.x, ball.position.y);
+        context.lineTo(dragCurrent.x, dragCurrent.y);
+        context.stroke();
+        
+        context.font = "75px serif";
+        // Use a shoe emoji to represent a football kicker’s boot.
+        context.fillText("👟", ball.position.x - 50, ball.position.y);
+      }
+      
+      // Draw the score and timer if the game is active.
+      if (gameActive) {
+        context.font = "20px sans-serif";
+        context.fillStyle = "black";
+        context.textAlign = "left";
+        context.fillText("Score: " + score, 10, 30);
+        
+        context.font = "20px sans-serif";
+        context.fillStyle = "black";
+        context.textAlign = "right";
+        context.fillText("Time: " + timeLeft, 790, 30);
+      } else {
+        // When time runs out, display the final score in large numbers at the top.
+        context.font = "80px sans-serif";
+        context.fillStyle = "black";
+        context.textAlign = "center";
+        context.fillText("Final Score: " + score, 400, 100);
+      }
+      
+      // Draw football goal posts.
+      // (These replace the soccer net from the original game.)
+      context.strokeStyle = "white";
+      context.lineWidth = 5;
+      // Draw crossbar.
+      context.beginPath();
+      context.moveTo(goal.position.x - 30, goal.position.y - 100);
+      context.lineTo(goal.position.x + 30, goal.position.y - 100);
+      context.stroke();
+      // Draw left upright.
+      context.beginPath();
+      context.moveTo(goal.position.x - 30, goal.position.y - 100);
+      context.lineTo(goal.position.x - 30, goal.position.y + 100);
+      context.stroke();
+      // Draw right upright.
+      context.beginPath();
+      context.moveTo(goal.position.x + 30, goal.position.y - 100);
+      context.lineTo(goal.position.x + 30, goal.position.y + 100);
+      context.stroke();
+      
+      // Draw the touchdown message if any.
+      if (goalMessage) {
+        context.font = "50px sans-serif";
+        context.fillStyle = "red";
+        context.textAlign = "center";
+        context.fillText(goalMessage, 400, 300);
+      }
+    });
+    
+    // ----- Interaction for the Kick -----
+    let isDragging = false;
+    let dragStart = null;
+    let dragCurrent = null;
+    
+    function getCanvasPos(canvas, evt) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: evt.clientX - rect.left,
+        y: evt.clientY - rect.top
+      };
+    }
+    
+    // Mouse events.
+    canvas.addEventListener('mousedown', function(evt) {
+      if (!gameActive) return;
+      const mousePos = getCanvasPos(canvas, evt);
+      const dist = Math.hypot(mousePos.x - ball.position.x, mousePos.y - ball.position.y);
+      if (dist <= ballRadius) {
+        isDragging = true;
+        dragStart = mousePos;
+        dragCurrent = mousePos;
+      }
+    });
+    
+    canvas.addEventListener('mousemove', function(evt) {
+      if (!gameActive) return;
+      if (isDragging) {
+        dragCurrent = getCanvasPos(canvas, evt);
+      }
+    });
+    
+    canvas.addEventListener('mouseup', function(evt) {
+      if (!gameActive) return;
+      if (isDragging) {
+        isDragging = false;
+        const dragEnd = getCanvasPos(canvas, evt);
+        const forceMagnitude = 0.005;
+        const force = {
+          x: (dragStart.x - dragEnd.x) * forceMagnitude,
+          y: (dragStart.y - dragEnd.y) * forceMagnitude
+        };
+        Body.applyForce(ball, ball.position, force);
+        kickCount++;  // Count this kick.
+        dragStart = null;
+        dragCurrent = null;
+      }
+    });
+    
+    // Touch events.
+    canvas.addEventListener('touchstart', function(evt) {
+      if (!gameActive) return;
+      evt.preventDefault();
+      const touch = evt.touches[0];
+      const pos = getCanvasPos(canvas, touch);
+      const dist = Math.hypot(pos.x - ball.position.x, pos.y - ball.position.y);
+      if (dist <= ballRadius) {
+        isDragging = true;
+        dragStart = pos;
+        dragCurrent = pos;
+      }
+    });
+    
+    canvas.addEventListener('touchmove', function(evt) {
+      if (!gameActive) return;
+      evt.preventDefault();
+      if (isDragging) {
+        const touch = evt.touches[0];
+        dragCurrent = getCanvasPos(canvas, touch);
+      }
+    });
+    
+    canvas.addEventListener('touchend', function(evt) {
+      if (!gameActive) return;
+      evt.preventDefault();
+      if (isDragging) {
+        isDragging = false;
+        const touch = evt.changedTouches[0];
+        const dragEnd = getCanvasPos(canvas, touch);
+        const forceMagnitude = 0.005;
+        const force = {
+          x: (dragStart.x - dragEnd.x) * forceMagnitude,
+          y: (dragStart.y - dragEnd.y) * forceMagnitude
+        };
+        Body.applyForce(ball, ball.position, force);
+        kickCount++;  // Count this kick.
+        dragStart = null;
+        dragCurrent = null;
+      }
+    });
+    
+    // ----- Collision Events -----
+    // Touchdown collision: compute round bonus (based solely on kicks), display "TOUCHDOWN!",
+    // add the bonus to the score, and then reset the round.
+    Events.on(engine, 'collisionStart', function(event) {
+      if (!gameActive) return;
+      event.pairs.forEach(pair => {
+        if ((pair.bodyA === ball && pair.bodyB === goal) ||
+            (pair.bodyB === ball && pair.bodyA === goal)) {
+          let roundScore = 100 - ((kickCount - 1) * 10);
+          if (roundScore < 0) roundScore = 0;
+          score += roundScore;
+          goalMessage = "TOUCHDOWN!";
+          setTimeout(() => { goalMessage = ""; }, 2000);
+          resetRound();
+          
+          // Create a new obstacle (defender) at a random location.
+          let newX, newY;
+          if (Math.random() < 0.5) {
+            // Ground defender.
+            newX = Math.random() * (650 - 300) + 300;
+            newY = Math.random() * (580 - 550) + 550;
+          } else {
+            // Air defender.
+            newX = Math.random() * (650 - 300) + 300;
+            newY = Math.random() * (400 - 200) + 200;
+          }
+          const newObstacle = Bodies.rectangle(newX, newY, 100, 20, {
+            isStatic: true,
+            angle: Math.PI * (Math.random() * 0.3 - 0.15),
+            render: { fillStyle: '#8B4513' },
+            isObstacle: true,
+            isNewObstacle: true
+          });
+          Composite.add(world, newObstacle);
+        }
+      });
+    });
+    
+    // Defender collision: immediately subtract 50 points (score never goes below zero).
+    Events.on(engine, 'collisionStart', function(event) {
+      if (!gameActive) return;
+      event.pairs.forEach(pair => {
+        if ((pair.bodyA === ball && pair.bodyB.isObstacle) ||
+            (pair.bodyB === ball && pair.bodyA.isObstacle)) {
+          score = Math.max(score - 50, 0);
+        }
+      });
+    });
+    
+    // Off-screen check: if the ball goes off the left or right side, fully reset the game.
+    Events.on(engine, 'afterUpdate', function() {
+      if (!gameActive) return;
+      if (ball.position.x < 0 || ball.position.x > 800) {
+        alert("Ball went off screen. Game over.");
+        resetGame();
+      }
+    });
+    
+    // ----- Reset Functions -----
+    // Reset the round: reposition the ball and reset the kick counter.
+    function resetRound() {
+      Body.setPosition(ball, { x: 150, y: 500 });
+      Body.setVelocity(ball, { x: 0, y: 0 });
+      kickCount = 0;
+    }
+    
+    // Full game reset: remove any obstacles that were added (non-original),
+    // reset score, timer, and game state.
+    function resetGame() {
+      const allBodies = Composite.allBodies(world);
+      allBodies.forEach(body => {
+        if (!body.isOriginal && body.isObstacle) {
+          Composite.remove(world, body);
+        }
+      });
+      score = 0;
+      timeLeft = 30;
+      gameActive = true;
+      resetRound();
+    }
+    
+    function showNewGameButton() {
+      newGameButton.style.display = "block";
+    }
+    
+  </script>
+</body>
+</html>
